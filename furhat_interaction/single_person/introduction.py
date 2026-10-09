@@ -1,6 +1,6 @@
 """Single-person interaction scene: arrival, introduction, object-aware dialogue.
 
-Run: .venv/bin/python main.py --people=1 --scenario=introduction --mic=builtin
+Run: .venv/bin/python demos/single_person/introduction.py --mic=builtin
 Q/Esc closes both views. Uses the configured Furhat voice and local Ollama.
 """
 import argparse

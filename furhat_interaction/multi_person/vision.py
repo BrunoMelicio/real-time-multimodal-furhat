@@ -27,7 +27,7 @@ def head_trace(history,at,left,right,base):
 
 
 class Vision:
-    def __init__(self,part,object_model='ssd'):
+    def __init__(self,part,object_model='ssd', *, continuous=False, max_people=2):
         import os
         os.environ['YOLO_AUTOINSTALL']='false'
         import cv2,mediapipe as mp,torch
@@ -36,6 +36,7 @@ class Vision:
         self.cv2,self.mp=cv2,mp
         torch.set_num_threads(2);cv2.setNumThreads(1)
         self.rotation,self.angles,self.iris=head_rotation,head_angles,iris_offsets
+        self.max_people=max_people;self.classify_gestures=part==2 or continuous
         self.part=part;self.seats=Seats();self.face=self.pose=self.gesture=self.objects=None
         self.profile=False;self.timings={}
         self.people=[];self.detect_at=-float('inf');self.stamp=-1
@@ -55,24 +56,24 @@ class Vision:
         try:
             self.detector=YOLO(path('yolo26n.pt'))
             self.face=mp.tasks.vision.FaceLandmarker.create_from_options(mp.tasks.vision.FaceLandmarkerOptions(
-                base_options=base('face_landmarker.task'),running_mode=video,num_faces=2,
+                base_options=base('face_landmarker.task'),running_mode=video,num_faces=max_people,
                 output_facial_transformation_matrixes=True,output_face_blendshapes=True))
             if part in (2,3):
                 self.pose=mp.tasks.vision.PoseLandmarker.create_from_options(mp.tasks.vision.PoseLandmarkerOptions(
-                    base_options=base('pose_landmarker_lite.task'),running_mode=video,num_poses=2,
+                    base_options=base('pose_landmarker_lite.task'),running_mode=video,num_poses=max_people,
                     output_segmentation_masks=False))
-                if part==3:
+                if not self.classify_gestures:
                     # Use the EXACT hand detector/landmark assets already inside
                     # our cached gesture task, without its unused gesture classifier.
                     from zipfile import ZipFile
                     with ZipFile(path('gesture_recognizer.task')) as bundle:
                         hand_asset=bundle.read('hand_landmarker.task')
                     self.gesture=mp.tasks.vision.HandLandmarker.create_from_options(mp.tasks.vision.HandLandmarkerOptions(
-                        base_options=mp.tasks.BaseOptions(model_asset_buffer=hand_asset),running_mode=video,num_hands=4))
+                        base_options=mp.tasks.BaseOptions(model_asset_buffer=hand_asset),running_mode=video,num_hands=2*max_people))
                 else:
                     self.gesture=mp.tasks.vision.GestureRecognizer.create_from_options(mp.tasks.vision.GestureRecognizerOptions(
-                        base_options=base('gesture_recognizer.task'),running_mode=video,num_hands=4))
-            if part==1:
+                        base_options=base('gesture_recognizer.task'),running_mode=video,num_hands=2*max_people))
+            if part==1 or continuous:
                 from furhat_interaction.vision import OBJECT_MODELS
                 self.objects=mp.tasks.vision.ObjectDetector.create_from_options(mp.tasks.vision.ObjectDetectorOptions(
                     base_options=base(OBJECT_MODELS[object_model]),running_mode=video,max_results=8,score_threshold=.3,
@@ -88,7 +89,7 @@ class Vision:
         timings={};tick=perf_counter() if self.profile else 0.
         if at-self.detect_at>=.2:
             result=self.detector.track(frame,classes=[0],persist=True,tracker='bytetrack.yaml',
-                imgsz=320,device='cpu',conf=.35,max_det=2,verbose=False)[0]
+                imgsz=320,device='cpu',conf=.35,max_det=self.max_people,verbose=False)[0]
             self.people=self.seats.update(observations(result),at,w);self.detect_at=at
         if self.profile:
             end=perf_counter();timings['people_ms']=(end-tick)*1000;tick=end
@@ -126,13 +127,13 @@ class Vision:
             poses=self.pose.detect_for_video(image,self.stamp).pose_landmarks
             if self.profile:
                 end=perf_counter();timings['body_ms']=(end-tick)*1000;tick=end
-            result=(self.gesture.detect_for_video(image,self.stamp) if self.part==3
+            result=(self.gesture.detect_for_video(image,self.stamp) if not self.classify_gestures
                     else self.gesture.recognize_for_video(image,self.stamp))
             if self.profile:
                 end=perf_counter();timings['hands_ms']=(end-tick)*1000;tick=end
             raw=[]
             for i,p in enumerate(result.hand_landmarks):
-                xy=np.array([(v.x*w,v.y*h) for v in p]);cats=result.gestures[i] if self.part==2 else []
+                xy=np.array([(v.x*w,v.y*h) for v in p]);cats=result.gestures[i] if self.classify_gestures else []
                 best=max(cats,key=lambda c:c.score) if cats else None
                 raw.append(dict(points=xy,wrist=tuple(map(float,xy[0])),label=best.category_name if best else ('Hand' if self.part==3 else 'None'),
                                 score=float(best.score) if best else 0.))

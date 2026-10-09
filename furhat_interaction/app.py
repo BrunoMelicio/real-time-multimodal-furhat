@@ -22,25 +22,26 @@ def check():
 
 
 def main(argv=None):
-    parser=argparse.ArgumentParser(description='Real-Time Multimodal Interaction with Furhat: interaction scene launcher.')
-    parser.add_argument('--people',type=int,choices=(1,2),default=2)
-    selection=parser.add_mutually_exclusive_group()
-    selection.add_argument('--scenario', choices=('introduction','game','reflection'),
-                           help='Choose an interaction scenario (default: introduction).')
-    selection.add_argument('--part',type=int,choices=(1,2,3),help=argparse.SUPPRESS)
-    parser.add_argument('--check',action='store_true',help='Check local dependencies/weights without using hardware.')
+    parser=argparse.ArgumentParser(description='Real-Time Multimodal Interaction with Furhat.',add_help=False)
+    parser.add_argument('--people',type=int,choices=(1,2),default=2,
+                        help='Participant capacity; more than two coming soon.')
+    parser.add_argument('--check',action='store_true',help='Check dependencies/weights without hardware.')
     args,remaining=parser.parse_known_args(argv)
     if args.check:
         if remaining: parser.error('Unexpected arguments with --check: '+' '.join(remaining))
         return check()
-    scenarios=('introduction','game','reflection')
-    part=args.part or (scenarios.index(args.scenario)+1 if args.scenario else 1)
-    scenario=scenarios[part-1]
-    if args.people==2:
+    from furhat_interaction.session.runtime import run
+    return run(args.people,remaining)
+
+
+def run_demo(people,scenario,argv=None):
+    """Independent demonstrations; the main app does not select scenarios."""
+    remaining=list(argv or [])
+    part=('introduction','game','reflection').index(scenario)+1
+    if people==2:
         from furhat_interaction.multi_person.runtime import run
         return run(part,remaining)
-    module=importlib.import_module(f'furhat_interaction.single_person.{scenario}')
-    # Existing single-person mains use argparse's normal process arguments.
+    module=importlib.import_module('furhat_interaction.single_person.'+scenario)
     previous=sys.argv
     try:
         sys.argv=[str(ROOT/'furhat_interaction'/'single_person'/f'{scenario}.py'),*remaining]

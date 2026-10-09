@@ -24,3 +24,6 @@ notes.md
 *.tflite
 *.task
 *.safetensors
+
+# Local development instructions are not published.
+AGENTS.md

@@ -1,4 +1,4 @@
-# 🛠️ How the interaction works
+# 🛠️ Continuous multimodal interaction
 
 ```mermaid
 flowchart LR
@@ -8,45 +8,57 @@ flowchart LR
     VAD --> ASD[Light-ASD speaker association]
     Camera --> ASD
     ASD --> ASR[Whisper.cpp transcription]
-    ASR --> Scene[Scenario state + participant context]
-    Cues --> Scene
-    Scene --> Game[Scripted game / scoring]
-    Scene --> LLM[Local Ollama response]
-    Game --> Robot[Furhat speech · lip sync · attention · gestures]
-    LLM --> Robot
+    ASR --> Session[Session memory + conversation context]
+    Cues --> Session
+    Session --> LLM[Ollama: reply + semantic game intent]
+    LLM --> Chat[Conversation]
+    LLM --> Game[Game controller + gesture scoring]
+    Game --> Reflect[Automatic post-game reflection]
+    Reflect --> Session
+    Chat --> Robot[Furhat voice · lip sync · attention · gestures]
+    Game --> Robot
 ```
 
-## ⚙️ Runtime design
+## ⚙️ How the app runs
 
-- **One scenario per process:** `main.py` routes to introduction, game or reflection for one or two people. It imports the selected runtime after parsing arguments.
-- **Shared paths:** `furhat_interaction/paths.py` anchors models and outputs to the repository, independent of module location.
-- **Fresh camera frames:** a latest-frame capture avoids building a queue of stale video frames.
-- **Separate ownership:** the two-person runtime separates audio analysis, transcription and dialogue work from the preview loop.
-- **Speaker attribution during speech:** the participant is associated using evidence collected while the utterance occurs, rather than whichever box is active when transcription finishes.
-- **Hand ownership:** body wrists and spatial evidence associate hands with participants; ambiguous assignments are rejected.
-- **Continuous perception within a scene:** all visual components required by that scenario remain active. Introduction uses objects; game/reflection use body and hands.
-- **Native output:** Furhat produces speech and lip synchronization. Python sends attention and gesture commands.
+1. **Load once:** `main.py` starts one session with shared camera, perception, audio, transcription and dialogue owners. Required models are reused across conversation, games and reflection.
+2. **Observe continuously:** people, faces, approximate gaze, body pose, hands and objects remain active. Participant capacity currently accepts one or two; larger groups are planned.
+3. **Associate speech:** VAD finds speech boundaries. Light-ASD associates the utterance with a tracked participant using evidence from **during speech**, before transcription finishes.
+4. **Build context:** send the local language model the named participant's speech, recent conversation, observed visual cues, object association and actual game results.
+5. **Choose an action:** the LLM returns a validated reply/action. A semantic game request enters rock–paper–scissors without an exact trigger phrase. Python controls rounds and scoring.
+6. **Reflect and continue:** keep results in memory, ask about the game and return to ongoing conversation. No external winner argument or separate reflection launch is needed.
 
-## 🧩 Where to look
+The new continuous integration has offline state/routing tests; **live end-to-end validation is still pending**. Standalone component demonstrations remain available independently.
 
-| Folder/module | Responsibility |
-|---|---|
-| `furhat_interaction/app.py` | Routing and dependency preflight |
-| `single_person/` | One-person scenario entrypoints |
-| `multi_person/` | Two-person state, audio, cues, perception and timing |
-| `dialogue.py`, `asr.py`, `active_speaker.py`, `audio/` | Conversation, recognition, speaker detection and VAD |
-| `vision.py`, `head_gaze.py`, `game_vision.py`, `reflection_vision.py` | Camera, geometry and perception |
-| `game.py`, `reflection.py`, `group/` | Game policies, reflection cues, robot and ownership helpers |
-| `third_party/light/` | Vendored Light-ASD model architecture and MIT license |
+## 🧠 Upstream components
 
-## 📊 Timing
+| Component | Official source | Use here |
+|---|---|---|
+| People/tracks | [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) | Nano person detector and short-term tracking |
+| Face, body and hands | [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Landmarks, gesture labels and calibrated relative cues |
+| Objects | [TensorFlow Object Detection](https://github.com/tensorflow/models/tree/master/research/object_detection), [EfficientDet](https://github.com/google/automl/tree/master/efficientdet) | SSD / EfficientDet-Lite via MediaPipe |
+| Voice activity | [Silero VAD](https://github.com/snakers4/silero-vad) | Speech segmentation and interruption evidence |
+| Active speaker | [Light-ASD](https://github.com/Junhua-Liao/Light-ASD) | Match speech activity with visible face video |
+| ASR | [Whisper](https://github.com/openai/whisper), [whisper.cpp](https://github.com/ggml-org/whisper.cpp), [pywhispercpp](https://github.com/absadiki/pywhispercpp) | Local Base/Small transcription |
+| Language | [Llama](https://github.com/meta-llama/llama-models) via [Ollama](https://github.com/ollama/ollama) | Conversation and semantic game decisions; Built with Llama by default |
+| Smaller language fallback | [Gemma](https://github.com/google/gemma_pytorch) | Optional locally installed 270M model |
+| Robot interface | [Furhat Realtime API](https://docs.furhat.io/realtime-api/intro) | Native speech, lip sync, head attention and facial gestures |
 
-For two-person scenes, `--profile` reports mean stage durations and recent FPS. It separates people, face, geometry, body, hands, rendering and display work. ASR logs report decoding and final-after-voice latency. FPS alone does not describe conversational response delay.
+## ⏱️ Responsiveness and ownership
 
-The current two-person runs keep terminal logs and do not save run files. Single-person scenes retain their local session/output behavior under ignored `text_output/single_person/` folders. Model weights stay under ignored `models/` paths; Whisper uses its own cache.
+- A latest-frame camera avoids stale video queues.
+- Audio analysis and transcription run separately from the preview; small queues limit backlogs.
+- Uncertain speaker attribution asks for a repeat instead of assigning a transcript to the wrong participant.
+- Hand ownership uses body wrists and spatial evidence; ambiguous assignments are rejected.
+- One-person robot moves are randomly committed before reading the person's hand. Group scores come from observed signs.
+- A listening nod is throttled; head-follow commands briefly pause so the acknowledgment stays visible.
+- Conversation memory and visible dialogue are bounded. No recordings or run reports are saved by the continuous app.
+- `--profile` reports perception/render/display timings. ASR logs report decode and final-after-voice delays; FPS alone does not describe conversational latency.
 
-## 🔜 Next milestone
+Current conversation remains turn based. Experimental VAD/Light-ASD interruptions can stop a robot reply; there is no acoustic echo cancellation or integrated overlapping-speech separation. Full-duplex conversation is on the roadmap.
 
-A continuous session should load the selected stack once and carry names/game results through all three scenarios in memory. That integration is **not implemented by the current scene launcher**. Validate it incrementally, starting with one participant. Overlapping speech separation is also outside the current scenarios.
+## 📜 Licensing
+
+Original project code uses [MIT](../LICENSE). **Dependencies and model weights retain their own licenses**; check them before deploying or distributing a combined system. See [third-party notices](third_party.md), particularly YOLO's AGPL/Enterprise terms and Llama's Community License.
 
 [← Back to the README](../README.md)
