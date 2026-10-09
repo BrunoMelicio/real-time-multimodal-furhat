@@ -1,0 +1,65 @@
+[
+  {
+    "path": "face_landmarker.task",
+    "bytes": 3758596,
+    "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+    "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+    "installer": "http"
+  },
+  {
+    "path": "pose_landmarker_lite.task",
+    "bytes": 5777746,
+    "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+    "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+    "installer": "http"
+  },
+  {
+    "path": "gesture_recognizer.task",
+    "bytes": 8373440,
+    "sha256": "97952348cf6a6a4915c2ea1496b4b37ebabc50cbbf80571435643c455f2b0482",
+    "url": "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+    "installer": "http"
+  },
+  {
+    "path": "hand_landmarker.task",
+    "bytes": 7819105,
+    "sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
+    "url": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    "installer": "http"
+  },
+  {
+    "path": "yolo26n.pt",
+    "bytes": 5544453,
+    "sha256": "9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef",
+    "url": null,
+    "installer": "ultralytics"
+  },
+  {
+    "path": "efficientdet_lite0_int8.tflite",
+    "bytes": 4602795,
+    "sha256": "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb",
+    "url": "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite",
+    "installer": "http"
+  },
+  {
+    "path": "efficientdet_lite2_int8.tflite",
+    "bytes": 7515971,
+    "sha256": "b3f50554cb0ea559e90328845f7d9ba4d13c8bff372914d24e06bc8bb72fa896",
+    "url": "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/int8/1/efficientdet_lite2.tflite",
+    "installer": "http"
+  },
+  {
+    "path": "ssd_mobilenet_v2_float32.tflite",
+    "bytes": 11316189,
+    "sha256": "b8ccb1a25d45455ba52e85f26531948e1cb75efeb94c7c3d456d54fd4d6fbdd2",
+    "url": "https://storage.googleapis.com/mediapipe-models/object_detector/ssd_mobilenet_v2/float32/latest/ssd_mobilenet_v2.tflite",
+    "installer": "http"
+  },
+  {
+    "path": "speaker_association/light_talkset.model",
+    "bytes": 4175289,
+    "sha256": "efc375833887eefa9d209dc92810e18519b04c3c73ea35a549f2a7f40b7d94d5",
+    "url": "https://raw.githubusercontent.com/nvthach124/Light-ASD/9d2a6db1bf27929dfff5a460438598130bc7bd8e/weight/finetuning_TalkSet.model",
+    "installer": "http"
+  }
+]
