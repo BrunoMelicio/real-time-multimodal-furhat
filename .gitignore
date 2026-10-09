@@ -13,7 +13,7 @@ audio_output/
 vision_output/
 text_output/
 presentation_output/
-conference_session.json
+interaction_session.json
 notes.md
 *.wav
 *.mp4

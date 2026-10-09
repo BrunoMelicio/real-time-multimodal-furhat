@@ -6,9 +6,9 @@ from threading import Event
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import AsyncMock,Mock,patch
-from conference_ready_multi.cues import ReflectionCues,acknowledge_downward
-from conference_ready_multi.runtime import dialogue
-from conference_ready_multi.scenes import Scene
+from furhat_interaction.multi_person.cues import ReflectionCues,acknowledge_downward
+from furhat_interaction.multi_person.runtime import dialogue
+from furhat_interaction.multi_person.scenes import Scene
 
 
 LOW='head lowered relative to starting posture'
@@ -66,8 +66,8 @@ class MultiReflection(unittest.TestCase):
             if not jobs.empty(): return Queue.get(jobs)
             stop.set();raise Empty
         with patch.object(jobs,'get',side_effect=next_job),patch(
-                'conference_ready_multi.runtime.asyncio.run_coroutine_threadsafe',side_effect=schedule),patch(
-                'conference_ready_multi.runtime.reply',return_value='Sorry you feel down. Losing is okay.'):
+                'furhat_interaction.multi_person.runtime.asyncio.run_coroutine_threadsafe',side_effect=schedule),patch(
+                'furhat_interaction.multi_person.runtime.reply',return_value='Sorry you feel down. Losing is okay.'):
             if interrupt:
                 def wait(timeout): mode.value=3;return False
                 with patch.object(stop,'wait',side_effect=wait):

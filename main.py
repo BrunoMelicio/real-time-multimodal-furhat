@@ -1,4 +1,4 @@
-"""Common entrypoint for the preserved conference scenes.
+"""Common entrypoint for the preserved interaction scenes.
 
 The continuous all-scenes application is the next development milestone.
 """
