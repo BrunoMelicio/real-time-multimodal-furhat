@@ -160,54 +160,35 @@ Whistle and Phonon are optional local backends. Install their runtimes once (alr
 .venv/bin/python main.py --people=1 --mic=iphone --llm=groq --asr=whisper-base
 ```
 
-Use one equals sign: `--asr=whistle`. Quotes are optional (`--asr="whistle"` works too). All recognizers receive the same 16 kHz audio and Silero speech boundaries, load once in the ASR worker, and save no audio. New weights download into the runtime's cache on first use. Phonon can take longer to initialize MLX shaders on its first decode. Startup logs name the selected engine; `decode_ms` measures transcription time, while `final_after_voice_ms` also includes the speech-end pause and queueing.
+Choose a recognizer with `--asr=whistle`, `--asr=phonon` or a Whisper variant. Speech recognition runs locally; model weights may download on first use. No audio is saved.
 
-Both one- and two-person modes support interrupting **Furhat**: participant speech stops the current robot utterance, the app listens to the new turn, and the next response can revise the interrupted answer. Human participants are assumed to take turns; overlapping participant speech is not separated. This applies to conversation, invitations, game instructions and post-game follow-ups.
-
-The same `--barge-in` options apply to both people modes. Default `visual` combines Silero VAD with Light-ASD face/audio evidence to reduce interruptions caused by Furhat's own loudspeaker voice. `--barge-in=vad` stops on sustained speech onset without waiting to identify who spoke; group speaker attribution continues while listening. VAD alone also hears robot playback, so use `visual` with loudspeaker echo or VAD-only with headphones/acoustic isolation. While listening, one fresh visible face supplies the speaker identity; multiple faces use Light-ASD. This depends on who is present, not the configured capacity. Interrupted speech retains its onset audio. Empty transcriptions are ignored, including during game rounds.
-
-Hand ownership uses the same geometry in both modes: prefer matching pose wrists, then use a clear participant region if wrist landmarks are unavailable. One person can arrive before the other in `--people=2`; their hands do not need to wait for a second participant. Overlapping regions, competing wrists, duplicate wrist detections and distant hands remain unassigned. The preview labels unnamed owners as `Person 1` / `Person 2` and shows the reason for unassigned hands.
-
-Nods and head shakes answer invitations, game-rule questions and conversational questions through the same handling as spoken yes/no responses. Gestures made during a prompt or its short listening pause are buffered briefly; a spoken response takes precedence. Responses from an addressed participant are kept separate, and old gestures do not answer a later question. Head-motion smoothing uses elapsed time so lower camera frame rates do not continually reset detection. This remains camera-based motion inference, not a guarantee that every human nod will be recognized.
-
-An explicit request to play enters game setup directly; mentioning games can still lead to an invitation. During setup, a collective reply such as “we know the rules” answers the group question. Individual answers prompt the remaining player, and anyone needing an explanation gets the rules before play. A request to start can also proceed with a short explanation. Setup stays with the game controller: unrelated or misrecognized speech cannot turn it into an LLM-improvised countdown. Short replies without a speaker match can answer a pending group game question without assigning them to a guessed person; names and personal answers still require identity. Terminal `[STATE]` entries distinguish setup, hand release and active play.
+Both participant modes support interrupting Furhat, nod/shake responses and gesture-based games. Participants take turns; overlapping speech is not separated. The default `--barge-in=visual` checks face/audio activity to reduce robot echo; `--barge-in=vad` uses speech detection alone and may react to Furhat's own voice. See the [architecture guide](docs/architecture.md) for detection and game details.
 
 <a id="language-providers"></a>
 
 ### Language providers and API keys
 
-The flags separate **who serves the model** (`--llm`) from **which model** (`--llm-model`). Existing commands without these flags keep using local Ollama.
+**Local Ollama is the default**, using `llama3.2:1b` with no API key required. To use a cloud model, select its provider with `--llm` and its model with `--llm-model`.
 
-**Groq:** copy `.env.example` to `.env` in this repository, then edit the key there:
+Copy `.env.example` to `.env` in the project folder and add your provider's API key. For **Groq**:
 
 ```dotenv
 GROQ_API_KEY=paste_your_key_here
 ```
 
-The app automatically reads this checkout's `.env` regardless of the current working directory. `.env` is ignored by Git; exported shell variables take precedence. Never put an actual key in `.env.example` or command-line flags.
-
 ```bash
-# Test the key/model without the camera, microphone or Furhat.
-.venv/bin/python main.py --llm=groq --llm-model=openai/gpt-oss-20b --check-llm
-
-# Run the interaction with Groq.
+# Groq with GPT-OSS 20B.
 .venv/bin/python main.py --people=1 --mic=iphone --llm=groq --llm-model=openai/gpt-oss-20b
 
-# Run with local Ollama instead.
+# Local Ollama.
 .venv/bin/python main.py --people=1 --mic=iphone --llm=ollama --llm-model=llama3.2:1b
 ```
 
-To make Groq the default, also put `LLM_PROVIDER=groq` and `LLM_MODEL=openai/gpt-oss-20b` in `.env`. CLI flags override those defaults.
+For **OpenAI**, add `OPENAI_API_KEY` and use `--llm=openai --llm-model=YOUR_MODEL_ID`. For another **OpenAI-compatible API**, add `LLM_API_KEY` and use `--llm=compatible --llm-base-url=YOUR_API_URL --llm-model=YOUR_MODEL_ID`.
 
-For **OpenAI**, set `OPENAI_API_KEY` in `.env` and use `--llm=openai --llm-model=YOUR_MODEL_ID`. For **another compatible service**, set `LLM_API_KEY` and use:
+The app loads `.env` automatically; Git excludes it. Optionally set `LLM_PROVIDER` and `LLM_MODEL` there to change the defaults; command-line flags override them. Add `--check-llm` to test the connection without opening devices.
 
-```bash
-.venv/bin/python main.py --llm=compatible --llm-base-url=https://your-provider.example/v1 --llm-model=YOUR_MODEL_ID --check-llm
-```
-
-The compatible service must support Chat Completions with JSON object responses. You can use `--llm-key-env=YOUR_PROVIDER_API_KEY` to read a differently named key. `LLM_BASE_URL` and `LLM_API_KEY_ENV` are the corresponding optional environment settings. `--ollama-url` remains a local-only alias for an Ollama endpoint.
-
-**Cloud data flow:** transcription, perception and speaker detection stay on your Mac. The selected cloud language provider receives the recognized speech, names, recent conversation, summarized visual cues and game results. Camera frames and raw microphone audio are not included in those language requests. Speech output still uses Furhat's selected voice.
+**Cloud requests contain text context**—transcripts, names, conversation, visual summaries and game results. Raw audio and camera frames stay local.
 
 ### 🎮 What interaction can look like
 
