@@ -49,8 +49,31 @@ def body_owners(poses, people, width, height):
     return {index:body for index,body in output.items() if body['person_id'] not in duplicated}
 
 
-def assign_hands(hands, bodies, margin=.25):
-    """Normalized wrist distance; reject near-ties between different people.
+def spatial_owner(wrist, people, margin=.25):
+    """Use a clear person region when a pose wrist is temporarily unavailable.
+
+    This uses the observed roster, never the configured participant capacity.
+    Hands outside everyone's reach, and overlapping/tied regions, stay unknown.
+    """
+    x,y=wrist
+    candidates=[]
+    for person in people:
+        identity=person.get('id')
+        x1,y1,x2,y2=map(float,person['box'])
+        width,height=x2-x1,y2-y1
+        if identity is None or width<=0 or height<=0: continue
+        dx=max(x1-x,0.,x-x2)/width
+        dy=max(y1-y,0.,y-y2)/height
+        if dx<=.2 and dy<=.15:
+            candidates.append((hypot(dx,dy),identity))
+    candidates.sort()
+    if not candidates or (len(candidates)>1 and candidates[1][0]-candidates[0][0]<margin):
+        return None
+    return candidates[0][1]
+
+
+def assign_hands(hands, bodies, margin=.25, *, people=()):
+    """Prefer pose wrists, then clear person regions; reject competing owners.
 
     Handedness means left/right anatomy, never a player ID. A single body wrist
     cannot own two detections. Each output retains a diagnostic reason.
@@ -76,10 +99,14 @@ def assign_hands(hands, bodies, margin=.25):
                 distance,identity,pose_index,joint,wrist = costs[0]
                 item.update(person_id=identity,pose_index=pose_index,body_joint=joint,
                             body_wrist=wrist,distance=float(distance),reason='Wrist match')
+        else:
+            identity=spatial_owner((x,y),people,margin)
+            if identity is not None:
+                item.update(person_id=identity,reason='Clear person region; pose wrist unavailable')
         output.append(item)
     used = {}
     for item in output:
-        if item['person_id'] is not None:
+        if item['person_id'] is not None and 'body_joint' in item:
             key = item['person_id'],item['body_joint']
             used.setdefault(key,[]).append(item)
     for matches in used.values():

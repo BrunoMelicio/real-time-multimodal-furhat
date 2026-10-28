@@ -3,6 +3,90 @@ import importlib
 from pathlib import Path
 from queue import Queue
 from time import perf_counter
+from dataclasses import dataclass
+from types import SimpleNamespace
+
+
+@dataclass(frozen=True)
+class ASRConfig:
+    engine: str = 'whisper'
+    model: str = 'base.en'
+
+
+def add_asr_arguments(parser):
+    parser.add_argument('--asr', choices=('whisper','whisper-base','whisper-tiny','whisper-small',
+                                        'whistle','phonon','phonon-2'), default=None,
+                        help='Speech recognizer (default: whisper-base).')
+    parser.add_argument('--asr-model', default=None,
+                        help='Whisper model size, Whistle .cact path, or Phonon model ID.')
+    parser.add_argument('--whisper', choices=('tiny.en','base.en','small.en'), default=None,
+                        help='Legacy Whisper model selector; prefer --asr=whisper-tiny, etc.')
+
+
+def resolve_asr(args):
+    engine = args.asr or 'whisper'
+    if args.whisper and engine not in ('whisper','whisper-base','whisper-tiny','whisper-small'):
+        raise ValueError('--whisper cannot be combined with a non-Whisper --asr.')
+    if engine.startswith('whisper'):
+        preset = {'whisper':'base.en','whisper-base':'base.en','whisper-tiny':'tiny.en',
+                  'whisper-small':'small.en'}[engine]
+        model = args.asr_model or args.whisper or preset
+        return ASRConfig('whisper', {'base':'base.en','tiny':'tiny.en','small':'small.en'}.get(model,model))
+    return ASRConfig('phonon' if engine=='phonon-2' else engine,
+                     args.asr_model or ('phonon-2' if engine in ('phonon','phonon-2') else 'whistle'))
+
+
+def create_asr(config):
+    # Standalone demonstrations still pass a Whisper model name directly.
+    if isinstance(config,str):
+        config = ASRConfig('whisper',config)
+    if config.engine == 'whisper':
+        return WhisperBackend(SimpleNamespace(engine='cpp',model=config.model,threads=2,cpp_device='cpu'))
+    if config.engine == 'whistle':
+        return WhistleBackend(config.model)
+    if config.engine == 'phonon':
+        return PhononBackend(config.model)
+    raise ValueError(f'Unknown ASR engine: {config.engine}')
+
+
+class WhistleBackend:
+    streaming = False
+
+    def __init__(self, model='whistle'):
+        import os
+        os.environ.setdefault('NEEDLE_TELEMETRY','0')
+        try:
+            from needle import Whistle
+        except ImportError:
+            raise RuntimeError('Install requirements-asr.txt to use --asr=whistle.') from None
+        self.model = Whistle(weights=None if model=='whistle' else model)
+        self.info = dict(engine='whistle',model=str(self.model.weights),device='CPU')
+
+    def decode(self, audio):
+        return self.model.transcribe(audio,language='en')['text'].strip()
+
+    def close(self):
+        # The native library is owned by the dedicated ASR process.
+        self.model = None
+
+
+class PhononBackend:
+    streaming = False
+
+    def __init__(self, model='phonon-2'):
+        try:
+            import fermion
+        except ImportError:
+            raise RuntimeError('Install requirements-asr.txt to use --asr=phonon.') from None
+        self.model = fermion.load_speech(model)
+        self.info = dict(engine='phonon',model=model,device='MLX on Apple Silicon; CPU elsewhere')
+
+    def decode(self, audio):
+        text, _, _ = self.model.transcribe_array(audio)
+        return text.strip()
+
+    def close(self):
+        self.model = None
 
 
 class WhisperBackend:

@@ -11,13 +11,13 @@ from furhat_interaction.paths import ROOT
 
 def check():
     modules=('numpy','cv2','mediapipe','torch','ultralytics','sounddevice',
-             'faster_whisper','pywhispercpp','furhat_realtime_api','python_speech_features')
+             'faster_whisper','pywhispercpp','furhat_realtime_api','python_speech_features','dotenv')
     missing=[name for name in modules if importlib.util.find_spec(name) is None]
     manifest=json.loads((ROOT/'models/manifest.json').read_text())
     absent=[item['path'] for item in manifest if not (ROOT/'models'/item['path']).is_file()]
     print('Missing Python modules: '+(', '.join(missing) or 'none'))
     print('Missing model files: '+(', '.join(absent) or 'none'))
-    print('This check does not open a microphone/camera, load models, or contact Furhat/Ollama.')
+    print('This check does not open a microphone/camera, load models, or contact Furhat/language providers.')
     return int(bool(missing or absent))
 
 

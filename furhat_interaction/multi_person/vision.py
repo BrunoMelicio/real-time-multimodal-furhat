@@ -137,7 +137,7 @@ class Vision:
                 best=max(cats,key=lambda c:c.score) if cats else None
                 raw.append(dict(points=xy,wrist=tuple(map(float,xy[0])),label=best.category_name if best else ('Hand' if self.part==3 else 'None'),
                                 score=float(best.score) if best else 0.))
-            hands=assign_hands(raw,body_owners(poses,self.people,w,h))
+            hands=assign_hands(raw,body_owners(poses,self.people,w,h),people=self.people)
             for slot in (1,2):
                 f=faces.get(slot)
                 if self.motion[slot].update(f['box'] if f else None,[p for p in hands if p['person_id']==slot],at): motion.append(slot)
@@ -197,8 +197,12 @@ class Vision:
             color=(80,240,80) if hand['person_id'] else (60,60,255)
             for a,b in CONNECTIONS: cv2.line(canvas,pt(hand['points'][a]),pt(hand['points'][b]),color,1)
             for p in hand['points']: cv2.circle(canvas,pt(p),2,color,-1)
-            owner=names.get(hand['person_id'],'Unassigned')
+            identity=hand['person_id']
+            owner=names.get(identity,f'Person {identity}') if identity is not None else 'Unassigned'
             cv2.putText(canvas,f"{owner}: {hand['label']}",pt(hand['points'][0]),0,.4,color,1)
+            if identity is None:
+                x,y=pt(hand['points'][0])
+                cv2.putText(canvas,hand['reason'],(max(0,x),max(14,y+15)),0,.35,color,1)
         for o in obs['objects']:
             x1,y1,x2,y2=o['box'];cv2.rectangle(canvas,pt((x1,y1)),pt((x2,y2)),(80,190,255),2)
             cv2.putText(canvas,o['label'],pt((x1,y1)),0,.48,(80,190,255),1)

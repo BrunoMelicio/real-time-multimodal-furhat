@@ -1,0 +1,9 @@
+-r requirements.txt
+# Optional local speech recognizers, tested with Python 3.12 on Apple M3.
+cactus-needle==3.2.8
+fermion-research==0.2.15
+soundfile==0.14.0
+zstandard==0.25.0
+mlx==0.32.4; platform_system == "Darwin" and platform_machine == "arm64"
+mlx-audio==0.6.2; platform_system == "Darwin" and platform_machine == "arm64"
+mlx-lm==0.32.2; platform_system == "Darwin" and platform_machine == "arm64"

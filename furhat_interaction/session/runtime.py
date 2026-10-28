@@ -9,7 +9,8 @@ from threading import Thread,Event
 from time import perf_counter,sleep
 from furhat_interaction.multi_person.performance import FrameStats
 from furhat_interaction.multi_person.cues import acknowledge_downward
-from furhat_interaction.dialogue import Ollama,clean_reply
+from furhat_interaction.llm import load_environment,add_llm_arguments,create_llm
+from furhat_interaction.asr import add_asr_arguments,resolve_asr
 from furhat_interaction.reflection import HAND_CUE,reassuring_reply,reflective_reply
 from furhat_interaction.multi_person.audio import capture,transcribe
 from furhat_interaction.multi_person.policies import center
@@ -32,6 +33,21 @@ def attention_target(part,state,confirmed,focus):
 
 
 def dialogue(robot,llm,jobs,events,stop,mode,epoch,after,robot_started):
+    def speak(segment,job,token):
+        if stop.is_set() or token!=epoch.value or mode.value==3: return False
+        if 'look_at' in segment:
+            events.put(dict(type='attention',epoch=token,target=segment['look_at']))
+        interruptible=bool(job.get('interruptible',True))
+        robot_started.value=perf_counter();mode.value=2 if interruptible else 0
+        events.put(dict(type='robot',epoch=token,text=segment['text'],next=job['next'],interruptible=interruptible,at=robot_started.value))
+        future=asyncio.run_coroutine_threadsafe(robot.client.async_client.request_speak_text(
+            segment['text'],wait=True,abort=True),robot.client._loop)
+        while not future.done() and not stop.is_set() and token==epoch.value and mode.value!=3: stop.wait(.015)
+        if stop.is_set() or token!=epoch.value or mode.value==3:
+            future.cancel();return False
+        future.result()
+        return True
+
     while not stop.is_set():
         try: job=jobs.get(timeout=.1)
         except Empty: continue
@@ -41,6 +57,8 @@ def dialogue(robot,llm,jobs,events,stop,mode,epoch,after,robot_started):
             if text is None:
                 try:
                     action,text=decide(llm,job)
+                    if not stop.is_set() and token==epoch.value:
+                        events.put(dict(type='llm_decision',epoch=token,action=action,person=job['target']))
                     if action!='chat':
                         if not stop.is_set() and token==epoch.value:
                             events.put(dict(type='decision',epoch=token,action=action,person=job['target']))
@@ -51,6 +69,8 @@ def dialogue(robot,llm,jobs,events,stop,mode,epoch,after,robot_started):
                           'first':'It is okay to feel disappointed about losing; learning takes practice.',
                           'support':'Thank you for telling me. We can pause and take this at your own pace.',
                           'choice':'Thank you for telling me. We can take this at your own pace.'}[job['kind']]
+                    if job.get('offer_game'):
+                        text='Would you like to play a few rounds of rock, paper, scissors?'
                 if job['kind']=='conversation':
                     text=acknowledge_downward(text,job.get('cues',[]))
                     text=reassuring_reply(text,job.get('cues',[]),job.get('speech',''))
@@ -59,21 +79,14 @@ def dialogue(robot,llm,jobs,events,stop,mode,epoch,after,robot_started):
             if stop.is_set() or token!=epoch.value: continue
             finished=True
             for segment in job.get('segments',[dict(text=text)]):
-                if 'look_at' in segment:
-                    events.put(dict(type='attention',epoch=token,target=segment['look_at']))
-                events.put(dict(type='robot',epoch=token,text=segment['text'],interruptible=bool(job.get('interruptible'))))
-                robot_started.value=perf_counter();mode.value=2 if job.get('interruptible') else 0
-                future=asyncio.run_coroutine_threadsafe(robot.client.async_client.request_speak_text(segment['text'],wait=True,abort=True),robot.client._loop)
-                while not future.done() and not stop.is_set() and token==epoch.value and mode.value!=3: stop.wait(.015)
-                if stop.is_set() or token!=epoch.value or mode.value==3:
-                    future.cancel();finished=False;break
-                future.result()
+                if not speak(segment,job,token): finished=False;break
             if not finished: continue
             if job.get('wink'):
                 robot.call(robot.client.async_client.request_gesture_start('Wink',intensity=.5,duration=.7,wait=True))
             if job.get('after_text'):
                 if 'segments' in job: events.put(dict(type='attention',epoch=token,target=job['target'] if job['next']=='after_game' else None))
-                robot.say(job['after_text']);events.put(dict(type='robot',epoch=token,text=job['after_text']))
+                if not speak(dict(text=job['after_text']),job,token): continue
+            if stop.is_set() or token!=epoch.value or mode.value==3: continue
             after.value=perf_counter()+.5
             mode.value=0 if job['next']=='complete' else 1
             events.put(dict(type='stage',epoch=token,stage=job['next'],at=after.value))
@@ -81,14 +94,16 @@ def dialogue(robot,llm,jobs,events,stop,mode,epoch,after,robot_started):
 
 
 def run(capacity=2,argv=None):
+    load_environment()
     parser=argparse.ArgumentParser(description='Continuous Furhat interaction: Space starts, Q/Esc exits.')
     parser.add_argument('--people',type=int,choices=(1,2),default=capacity,help='Participant capacity; larger groups coming soon.')
     parser.add_argument('--mic',default='builtin')
     parser.add_argument('--camera',type=int,default=0)
     parser.add_argument('--host',default='127.0.0.1')
-    parser.add_argument('--whisper',choices=['base.en','small.en'],default='base.en')
-    parser.add_argument('--model',default='llama3.2:1b')
-    parser.add_argument('--ollama-url',default='http://127.0.0.1:11434')
+    parser.add_argument('--barge-in',choices=('visual','vad'),default='visual',
+                        help='Speech interruption guard in either people mode: visual matches face/audio (default); vad stops on speech onset.')
+    add_asr_arguments(parser)
+    add_llm_arguments(parser)
     parser.add_argument('--object-model',choices=['ssd','lite0','lite2'],default='lite0')
     parser.add_argument('--names',nargs='+',help='Optional names, left to right in the preview. Otherwise ask each newcomer.')
     parser.add_argument('--no-mirror',action='store_true')
@@ -98,6 +113,25 @@ def run(capacity=2,argv=None):
     if args.mic.isdecimal(): args.mic=int(args.mic)
     if args.names and len(args.names)!=capacity:
         parser.error('--names must have one name per configured participant.')
+    try:
+        llm=create_llm(args)
+        asr=resolve_asr(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(f'[LLM] provider={llm.provider} model={llm.model}',flush=True)
+    if args.check_llm:
+        try:
+            llm.check()
+            result=json.loads(llm.chat_json([
+                dict(role='system',content='Return only a JSON object with ready set to true.'),
+                dict(role='user',content='Check the connection. Return {"ready": true}.')]))
+            if not isinstance(result,dict) or result.get('ready') is not True:
+                raise ValueError('Provider did not return the expected JSON object.')
+        except Exception as exc:
+            print(f'[ERROR] LLM check: {exc}',flush=True)
+            return 1
+        print('[READY] LLM connection and JSON generation passed. No devices opened.',flush=True)
+        return 0
     lines=[]
     def log(kind,**data):
         print(f'[{kind.upper()}] {json.dumps(data,ensure_ascii=False)}',flush=True)
@@ -112,7 +146,6 @@ def run(capacity=2,argv=None):
         from furhat_interaction.vision import Camera
         from furhat_interaction.group.robot import Robot
         from furhat_interaction.multi_person.vision import Vision
-        llm=Ollama(args.model,args.ollama_url)
         if llm: llm.check()
         vision=Vision(3,args.object_model,continuous=True,max_people=capacity);cv2=vision.cv2
         vision.profile=args.profile
@@ -121,37 +154,41 @@ def run(capacity=2,argv=None):
         robot=Robot(args.host);robot.start()
         robot.call(robot.client.async_client.send_event(dict(type='request.attend.location',x=0.,y=0.,z=1.,
                    slack_yaw=180.,slack_pitch=180.,slack_timeout=-1)))
-        for function,values in ((capture,(args.mic,stop,mode,epoch,after,robot_started,forced,crops,jobs,events)),
-                                (transcribe,(args.whisper,stop,jobs,events))):
+        for function,values in ((capture,(args.mic,stop,mode,epoch,after,robot_started,forced,crops,jobs,events,capacity,args.barge_in)),
+                                (transcribe,(asr,stop,jobs,events))):
             process=ctx.Process(target=function,args=values,daemon=True);process.start();processes.append(process)
         worker=Thread(target=dialogue,args=(robot,llm,speech_jobs,events,stop,mode,epoch,after,robot_started),daemon=True);worker.start()
         camera=Camera(cv2,args.camera);ready=set();started=False;status='Loading audio...'
         active=None;active_at=0.;partial='';voiced=False;voice_at=0.;voice_since=None
         last_final=-1;sequence=-1;obs=None;focus=None;head_future=None;head_at=0.;head=[0.,0.]
         nod_until=0.;nod_epoch=-1;next_nod=0.;nod_future=None
-        glance=None;glance_until=0.;glanced=set();barge_epoch=-1;hand_at=None
+        glance=None;glance_until=0.;glanced=set();barge_epoch=-1;hand_at=None;speaking_stage='chat'
         stats=FrameStats(args.profile)
         def submit(action):
             nonlocal status,partial,active,voice_since
             if action is None: return
+            action.setdefault('interruptible',True)
             mode.value=0;epoch.value+=1;forced.value=0;partial='';active=None;voice_since=None
             status='Thinking...' if action['text'] is None else 'Furhat speaking...'
+            if action.get('response_source'):
+                log('head_response',person=scene.label(action['response_person']),gesture=action['response_source'],next=action['next'])
             speech_jobs.put(dict(action,epoch=epoch.value,name=scene.label(action['target']),
                                  game=scene.memory,history=list(scene.history)))
         def resume():
             epoch.value+=1;forced.value=0;after.value=perf_counter();mode.value=1
         def interrupt(person,source):
             nonlocal barge_epoch,status,hand_at
-            if person not in (1,2) or barge_epoch==epoch.value: return
-            barge_epoch=epoch.value;mode.value=3;scene.state='correction';scene.focus=person;scene.loser=person;scene.part=3
-            status=f'Interrupted: listening to {scene.label(person)}'
+            if person not in (None,1,2) or barge_epoch==epoch.value: return
+            barge_epoch=epoch.value;mode.value=3
+            scene.interrupted(speaking_stage,person,source,perf_counter())
+            status=f'Interrupted: listening to {scene.label(person)}' if person is not None else 'Interrupted: listening'
             if source=='hand motion': forced.value=person;hand_at=perf_counter()
             request=asyncio.run_coroutine_threadsafe(robot.client.async_client.request_speak_stop(),robot.client._loop)
             def stopped(f):
                 try: f.result()
                 except Exception as exc: events.put(dict(type='error',message=f'Stop speech: {exc}'))
             request.add_done_callback(stopped)
-            log('interruption',person=scene.label(person),source=source)
+            log('interruption',person=scene.label(person) if person is not None else None,source=source)
         def keypress(key):
             nonlocal started,status
             if key==32 and not started and ready=={'audio','asr'} and obs:
@@ -189,23 +226,27 @@ def run(capacity=2,argv=None):
                 elif kind=='attention': scene.focus=event['target']
                 elif kind=='meter': voiced,voice_at=event['voiced'],perf_counter()
                 elif kind=='robot':
+                    speaking_stage=event.get('next',speaking_stage)
+                    scene.robot_speaking(event.get('at',perf_counter()))
+                    for detector in vision.head.values(): detector.reset()
+                    vision.head_cooldown={1:0.,2:0.}
                     lines.append('Furhat: '+event['text']);lines[:]=lines[-12:];log('furhat',text=event['text'])
                     scene.history.append(dict(person='Furhat',speech=event['text']))
                     scene.history=scene.history[-12:]
-                    if scene.part==3 and event.get('interruptible'):
+                    if event.get('interruptible'):
                         status='Furhat speaking; INTERRUPTION ENABLED'
-                        log('interruption_ready',person=scene.label(scene.loser),guard='Light-ASD or repeated hand motion near face')
+                        log('interruption_ready',guard=args.barge_in)
                 elif kind=='decision':
                     action=scene.apply_decision(event['action'],event['person'])
                     if action: submit(action)
                     else: scene.stage('chat',perf_counter());resume()
+                elif kind=='llm_decision':
+                    log('llm_decision',action=event['action'],person=scene.label(event['person']))
                 elif kind=='barge': interrupt(event['person'],event['source'])
                 elif kind=='stage':
                     scene.stage(event['stage'],event['at']);partial=''
                     status=f'Listening: {scene.state}'
-                    if scene.state=='rules':
-                        for detector in vision.head.values(): detector.reset()
-                        vision.head_cooldown={1:0.,2:0.}
+                    log('state',phase=scene.state,part=scene.part,game_state=scene.game.state)
                     if scene.state=='correction':
                         scene.hand_seen.clear()
                         for detector in vision.motion.values(): detector.reset()
@@ -220,6 +261,10 @@ def run(capacity=2,argv=None):
                     if not event['final']:
                         partial=f"{scene.label(slot) if slot else 'Person uncertain'} (partial): {text}";continue
                     last_final=event['turn'];partial=''
+                    if not text.strip():
+                        # VAD/noise can yield an empty transcript. It is not an
+                        # unidentified speaker and must not interrupt a round.
+                        resume();continue
                     cues=vision.cues[slot].context(event['start'],event['end']) if slot in (1,2) else []
                     if slot in scene.hand_seen: cues.append(HAND_CUE)
                     log('transcript',person=scene.names.get(slot,slot),text=text,visual_context=cues,
@@ -229,7 +274,12 @@ def run(capacity=2,argv=None):
                         hand_detection=vision.motion[slot].diagnostics() if slot in (1,2) and scene.part==3 else None)
                     if scene.part==3 and slot in (1,2):
                         log('posture',person=scene.label(slot),used_cues=cues,**vision.cues[slot].diagnostics(perf_counter()))
-                    if not text or slot is None:
+                    if slot is None:
+                        action=scene.unattributed(text)
+                        if action is not None:
+                            log('group_response',text=text,next=action['next'],speaker_identified=False)
+                            submit(action)
+                            continue
                         state=scene.state
                         submit(scene.say('I could not confidently tell who spoke. Please face the camera and repeat your full sentence.',state,scene.expected()))
                         continue
@@ -254,11 +304,11 @@ def run(capacity=2,argv=None):
                 scene.hand_seen.add(slot);log('visual_cue',person=scene.label(slot),observation=HAND_CUE)
                 if mode.value==2: interrupt(slot,'hand motion')
             if started:
-                if scene.part==2 and scene.state=='rules' and now>=after.value:
-                    for slot,answer in obs['head_events'].items():
-                        log('head_gesture',person=scene.label(slot),gesture='nod' if answer else 'head shake',**vision.head[slot].metrics)
-                if scene.state!='busy' and mode.value==1 and not voiced:
-                    submit(scene.observe(obs,now,vision,now>=after.value))
+                for slot,answer in obs['head_events'].items():
+                    log('head_gesture',person=scene.label(slot),gesture='nod' if answer else 'head shake',**vision.head[slot].metrics)
+                # Always deliver observations: short gestures during playback
+                # or its listening pause must survive until responses can act.
+                submit(scene.observe(obs,now,vision,mode.value==1 and not voiced and now>=after.value))
             if scene.part==3 and scene.state=='correction' and mode.value==3 and hand_at and now-hand_at>2. and not voiced:
                 submit(scene.say(reassuring_reply('',[HAND_CUE]),'reflect',scene.loser))
             visible={p['id']:p for p in obs['people']}

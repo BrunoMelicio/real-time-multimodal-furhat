@@ -85,14 +85,18 @@ class HeadMotion:
     def update(self,angles,at):
         import numpy as np
         if angles is None:
-            if self.samples and at-self.samples[-1][0]>.25: self.reset()
+            if self.samples and at-self.samples[-1][0]>.6: self.reset()
             return None
-        if self.samples and at-self.samples[-1][0]>.25: self.reset()
         raw=np.array(angles[:2],dtype=float)
+        if not np.isfinite(raw).all():
+            self.reset();return None
+        if self.samples and at<=self.samples[-1][0]: return None
+        if self.samples and at-self.samples[-1][0]>.6: self.reset()
         if self.previous is None: self.unwrapped=raw.copy()
         else: self.unwrapped+=((raw-self.previous+180.)%360.)-180.
-        self.previous=raw;self.recent.append(self.unwrapped.copy());self.recent=self.recent[-3:]
-        smooth=np.median(self.recent,axis=0)
+        self.previous=raw;self.recent.append((at,self.unwrapped.copy()))
+        self.recent=[row for row in self.recent[-3:] if at-row[0]<=.12]
+        smooth=np.median([row[1] for row in self.recent],axis=0)
         self.samples.append((at,smooth));self.samples=[row for row in self.samples if at-row[0]<=2.]
         spans=[];reversals=[]
         for axis,step in ((0,5.),(1,4.)):
@@ -104,7 +108,7 @@ class HeadMotion:
             spans.append(float(max(values)-min(values)));reversals.append(turns)
         self.metrics=dict(yaw_span=round(spans[0],1),pitch_span=round(spans[1],1),
                           yaw_reversals=reversals[0],pitch_reversals=reversals[1])
-        if len(self.samples)<6 or at-self.samples[0][0]<.5: return None
+        if len(self.samples)<4 or at-self.samples[0][0]<.35: return None
         answer=None
         if spans[0]>=18. and spans[0]>=1.4*spans[1] and reversals[0]>=2: answer=False
         elif spans[1]>=13. and spans[1]>=1.4*spans[0] and reversals[1]>=1: answer=True

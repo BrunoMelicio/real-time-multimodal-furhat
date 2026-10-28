@@ -65,18 +65,19 @@ def extract_name(text):
     candidate = re.split(r'[,.;!?]|\s+(?:and|but)\s+', candidate, maxsplit=1, flags=re.I)[0].strip()
     if not 1 <= len(candidate.split()) <= 3 or not re.fullmatch(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{0,35}", candidate):
         return None
-    if candidate.lower() in ('fine', 'good', 'okay', 'ok', 'ready', 'tired', 'not sure', 'hello', 'hi', 'thank you'):
+    if candidate.lower() in ('fine', 'good', 'okay', 'ok', 'ready', 'tired', 'not sure', 'hello', 'hi', 'thank you',
+                              'the one speaking', 'the person speaking', 'the speaker', 'speaking', 'talking'):
         return None
     return candidate.title()
 
 
-def clean_reply(text):
+def clean_reply(text, max_sentences=2):
     text = re.sub(r'^\s*(?:Furhat|Assistant)\s*:\s*', '', str(text), flags=re.I)
     text = ' '.join(text.replace('**', '').split())
     if not text or any(token in text for token in ('{', '}', '<|', '[INST]')):
         raise ValueError('LLM returned empty/invalid spoken text.')
     sentences = re.findall(r'[^.!?]+[.!?]?', text)
-    return ' '.join(s.strip() for s in sentences[:2]).strip()
+    return ' '.join(s.strip() for s in sentences[:max_sentences]).strip()
 
 
 def object_acknowledgment(text, context):
@@ -100,6 +101,8 @@ def object_acknowledgment(text, context):
 
 
 class Ollama:
+    provider = 'ollama'
+
     def __init__(self, model, url):
         self.model, self.url = model, url.rstrip('/')
 
@@ -113,6 +116,19 @@ class Ollama:
         tags = self.request('/api/tags').get('models', [])
         if self.model not in {r.get('name') for r in tags}:
             raise RuntimeError(f'Ollama model {self.model!r} not installed. Run: ollama pull {self.model}')
+
+    def chat_json(self, messages):
+        return self._chat(messages, json_mode=True)
+
+    def chat_text(self, messages):
+        return self._chat(messages, json_mode=False)
+
+    def _chat(self, messages, json_mode):
+        payload = dict(model=self.model, stream=False, keep_alive='5m', messages=messages,
+                       options=dict(temperature=.2 if json_mode else .7, num_ctx=4096, num_predict=256, num_thread=2))
+        if json_mode: payload['format']='json'
+        data = self.request('/api/chat', payload)
+        return data.get('message', {}).get('content', '')
 
     def reply(self, name, speech, context):
         system = ('You are Furhat speaking to one person in English. Use at most two short sentences, under 40 words total. '

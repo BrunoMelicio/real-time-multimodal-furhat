@@ -47,9 +47,14 @@ class ContinuousSession(unittest.TestCase):
             s.stage(action['next'],1)
         self.assertFalse(s.done)
 
-    def test_semantic_decision_starts_and_stops_game(self):
+    def test_invitation_acceptance_starts_and_stops_game(self):
         s=self.session()
-        action=s.apply_decision('start_game',2)
+        offer=s.apply_decision('offer_game',2)
+        self.assertIn('Would you like',offer['text'])
+        self.assertEqual(s.part,0)
+        s.stage(offer['next'],0)
+        job=s.transcript(2,'Yes, let us play.',[],None)
+        action=job
         self.assertIn('judge',action['text'])
         self.assertEqual(s.part,2)
         self.assertEqual(s.rules_players,(1,2))
@@ -117,28 +122,100 @@ class ContinuousSession(unittest.TestCase):
         self.assertEqual(action['next'],'chat')
         self.assertFalse(s.done)
 
+    def test_start_without_invitation_cannot_switch_to_game(self):
+        s=self.session((1,))
+        s.transcript(1,'I use it to call people and text message people.',[],'cell phone')
+        self.assertIsNone(s.apply_decision('start_game',1))
+        self.assertEqual(s.part,0)
+        self.assertIsNone(s.single)
 
-class ModelDecisions(unittest.TestCase):
-    def job(self,phase='chat'):
-        return dict(name='Alice',speech='Could we play something?',phase=phase,
-                    game={},history=[],cues=[],objects=None)
+    def test_invitation_expires_after_topic_change(self):
+        s=self.session((1,))
+        offer=s.apply_decision('offer_game',1);s.stage(offer['next'],0)
+        job=s.transcript(1,'I would rather talk about my work.',[],None)
+        self.assertTrue(job['game_invitation'])
+        s.stage(job['next'],1)
+        job=s.transcript(1,'Yes, I like my job.',[],None)
+        self.assertFalse(job['game_invitation'])
+        self.assertIsNone(s.apply_decision('start_game',1))
 
-    def llm(self,action,reply='That sounds fun.'):
-        return SimpleNamespace(model='fake',request=Mock(return_value=dict(message=dict(content=json.dumps(dict(action=action,reply=reply))))))
+    def test_another_person_cannot_accept_someones_invitation(self):
+        s=self.session()
+        offer=s.apply_decision('offer_game',1);s.stage(offer['next'],0)
+        job=s.transcript(2,'Yes.',[],None)
+        self.assertFalse(job['game_invitation'])
+        self.assertIsNone(s.apply_decision('start_game',2))
 
-    def test_llm_controls_intent_without_keyword_matching(self):
-        llm=self.llm('start_game')
-        self.assertEqual(decide(llm,self.job())[0],'start_game')
-        payload=llm.request.call_args.args[1]
-        self.assertEqual(payload['format'],'json')
+    def test_suggestions_wait_for_conversation_and_have_cooldown(self):
+        s=self.session((1,))
+        for i in range(4):
+            job=s.transcript(1,'My day has been good.',[],None)
+            self.assertEqual(job['offer_game'],i==3)
+            s.stage(job['next'],i)
+        offer=s.apply_decision('offer_game',1);s.stage(offer['next'],3)
+        job=s.transcript(1,'No thanks.',[],None)
+        self.assertFalse(job['offer_game'])
 
-    def test_invalid_output_fails_closed(self):
-        with self.assertRaises(ValueError): decide(self.llm('execute_command'),self.job())
-        with self.assertRaises(ValueError): decide(self.llm('chat',''),self.job())
+    def test_speaker_clarification_is_not_a_name(self):
+        s=Session(1);s.state='name';s.focus=1
+        action=s.transcript(1,'I am the one speaking.',[],None)
+        self.assertNotIn(1,s.names)
+        self.assertEqual(action['next'],'name')
 
-    def test_stop_outside_game_and_start_inside_game_are_ignored(self):
-        self.assertEqual(decide(self.llm('stop_game'),self.job())[0],'chat')
-        self.assertEqual(decide(self.llm('start_game'),self.job('playing'))[0],'chat')
+    def test_games_or_fun_mention_invites_without_starting_immediately(self):
+        for speech in ('I like to chat about games because I like to play games.',
+                       'I sometimes play games.','What do you do for fun?'):
+            with self.subTest(speech=speech):
+                s=self.session((1,));job=s.transcript(1,speech,[],None)
+                self.assertTrue(job['offer_game'])
+                self.assertEqual(s.part,0)
+                s.stage(job['next'],0)
+                accepted=s.transcript(1,'Yes, I would like to.',[],None)
+                self.assertEqual(accepted['next'],'rules')
+                self.assertEqual(s.part,2)
+
+    def test_negated_game_mention_keeps_chatting(self):
+        s=self.session((1,))
+        self.assertFalse(s.transcript(1,'I do not want to play games.',[],None)['offer_game'])
+
+    def test_stop_during_rules_returns_to_chat(self):
+        s=self.session((1,));s.begin_game(1);s.stage('rules',0)
+        self.assertEqual(s.transcript(1,'Stop the game please.',[],None)['next'],'chat')
+        self.assertEqual(s.part,0)
+
+
+class ConversationReplies(unittest.TestCase):
+    def job(self):
+        return dict(name='Alice',speech='I use it to call people and send messages.',
+                    game={},history=[],cues=[],objects='cell phone')
+
+    def test_conversation_uses_one_plain_text_request(self):
+        llm=SimpleNamespace(chat_text=Mock(return_value='Who do you enjoy calling?'))
+        self.assertEqual(decide(llm,self.job()),('chat','Who do you enjoy calling?'))
+        llm.chat_text.assert_called_once()
+
+    def test_reply_can_naturally_bridge_into_invitation(self):
+        job=self.job();job['offer_game']=True
+        llm=SimpleNamespace(chat_text=Mock(return_value='Speaking of fun, would you like to play rock, paper, scissors?'))
+        action,text=decide(llm,job)
+        self.assertEqual(action,'chat')
+        self.assertIn('play',text)
+        self.assertIn('smoothly invite',llm.chat_text.call_args.args[0][0]['content'])
+
+    def test_context_keeps_latest_speech_once(self):
+        job=self.job();job['history']=[dict(person='Furhat',speech='What do you use it for?'),
+                                     dict(person='Alice',speech=job['speech'])]
+        llm=SimpleNamespace(chat_text=Mock(return_value='Who do you call most often?'))
+        decide(llm,job)
+        messages=llm.chat_text.call_args.args[0]
+        self.assertEqual(messages[-1],dict(role='user',content=job['speech']))
+        self.assertEqual(sum(m['content']==job['speech'] for m in messages),1)
+        self.assertIn('cell phone',messages[0]['content'])
+
+    def test_no_model_action_or_evidence_parsing(self):
+        llm=SimpleNamespace(chat_text=Mock(return_value='That sounds useful. Who do you call most often?'))
+        self.assertEqual(decide(llm,self.job())[0],'chat')
+        self.assertEqual(llm.chat_text.call_count,1)
 
 
 class ContinuousRuntime(unittest.TestCase):
@@ -160,7 +237,8 @@ class ContinuousRuntime(unittest.TestCase):
         camera=Mock();camera.error=None;camera.snapshot.return_value=None
         with ExitStack() as stack:
             stack.enter_context(patch('furhat_interaction.session.runtime.mp.get_context',return_value=context))
-            stack.enter_context(patch('furhat_interaction.session.runtime.Ollama'))
+            stack.enter_context(patch('furhat_interaction.session.runtime.load_environment'))
+            stack.enter_context(patch('furhat_interaction.session.runtime.create_llm'))
             factory=stack.enter_context(patch('furhat_interaction.multi_person.vision.Vision',return_value=vision))
             stack.enter_context(patch('furhat_interaction.vision.Camera',return_value=camera))
             robot=stack.enter_context(patch('furhat_interaction.group.robot.Robot'))
@@ -187,7 +265,8 @@ class ContinuousRuntime(unittest.TestCase):
         value=lambda v:SimpleNamespace(value=v)
         with patch('furhat_interaction.session.runtime.decide',return_value=('start_game','Ready!')):
             dialogue(robot,Mock(),jobs,Sink(),stop,value(0),value(7),value(0.),value(0.))
-        self.assertEqual(events,[dict(type='decision',epoch=7,action='start_game',person=1)])
+        self.assertEqual(events,[dict(type='llm_decision',epoch=7,action='start_game',person=1),
+                                 dict(type='decision',epoch=7,action='start_game',person=1)])
         robot.say.assert_not_called();robot.client.async_client.request_speak_text.assert_not_called()
 
 
